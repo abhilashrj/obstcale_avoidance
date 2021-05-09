@@ -138,8 +138,8 @@ void process_cloud(const sensor_msgs::PointCloud2ConstPtr &input_cloud)
   voxel.filter(*ds_cloud);
 
   seg.setOptimizeCoefficients(true);
-  seg.setModelType (pcl::SACMODEL_PLANE);
-  seg.setMethodType (pcl::SAC_RANSAC);
+  seg.setModelType(pcl::SACMODEL_PLANE);
+  seg.setMethodType(pcl::SAC_RANSAC);
   seg.setDistanceThreshold(seg_dist_tr);
   seg.setMaxIterations(1000);
 
@@ -149,7 +149,9 @@ void process_cloud(const sensor_msgs::PointCloud2ConstPtr &input_cloud)
     int count = 0;
     while (ds_cloud->height*ds_cloud->width > original_size*plane_perc){
        
-
+        // count += 1;
+        // if(count == 4)
+        //     break;
         // Fit a plane
         seg.setInputCloud(ds_cloud);
         seg.segment(*inliers, *coefficients);
@@ -199,7 +201,7 @@ void process_cloud(const sensor_msgs::PointCloud2ConstPtr &input_cloud)
 
 
   
-//   toROSMsg(non_plane_cloud, *intermediate_cloud);
+//   toROSMsg(*ds_cloud, *intermediate_cloud);
 //   intermediate_cloud->header.frame_id = "kinect2_ir_optical_frame";   
 //   pub_intermediate.publish(intermediate_cloud);
  
