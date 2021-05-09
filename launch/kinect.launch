@@ -3,6 +3,11 @@
   
   <node name="rviz" pkg="rviz" type="rviz"  args="-d $(find obstacle_avoidance)/rviz/rviz_cfg.rviz"/>
 
-  <node pkg="obstacle_avoidance" name="kinect_node" type="kinect_node" output="screen"/>
-
+  <node pkg="obstacle_avoidance" name="kinect_node" type="kinect_node" output="screen">
+    <param name="min_z" type="double" value="0.0"/>
+    <param name="max_z" type="double" value="5.0"/>
+    <param name="voxel_size" type="double" value="0.012"/>
+    <param name="seg_dist_tr" type="double" value="0.02"/>
+     <param name="plane_perc" type="double" value="0.20"/>
+  </node>
 </launch>
