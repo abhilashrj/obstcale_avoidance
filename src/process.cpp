@@ -13,9 +13,12 @@
 #include <pcl/sample_consensus/method_types.h>
 #include <pcl/sample_consensus/model_types.h>
 #include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/segmentation/extract_clusters.h>
 #include <pcl/filters/extract_indices.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/passthrough.h>
+#include <pcl/filters/statistical_outlier_removal.h>
+#include <pcl/search/kdtree.h>
 
 #include <fstream>
 #include <vector>
@@ -25,6 +28,7 @@ typedef sensor_msgs::PointCloud2 PCloud2;
 
 ros::Publisher pub_intermediate;
 float min_z, max_z, voxel_size,seg_dist_tr, plane_perc;
+int min_cluster_size, max_cluster_size;
 
 double point2planedistnace(pcl::PointXYZ pt, pcl::ModelCoefficients::Ptr coefficients){
     double f1 = fabs(coefficients->values[0]*pt.x+coefficients->values[1]*pt.y+coefficients->values[2]*pt.z+coefficients->values[3]);
@@ -94,8 +98,9 @@ void process_cloud(const sensor_msgs::PointCloud2ConstPtr &input_cloud)
   pcl::PointCloud<Point>::Ptr cloud_in(new pcl::PointCloud<Point>), 
                          ds_cloud(new pcl::PointCloud<Point>),
                          filtered_cloud(new pcl::PointCloud<Point>),
-                          cloud_pub(new pcl::PointCloud<pcl::PointXYZRGB>);
-  pcl::PointCloud<Point> non_plane_cloud;
+                          cloud_pub(new pcl::PointCloud<Point>),
+                        cloud_cluster(new pcl::PointCloud<Point>);
+  pcl::PointCloud<Point> cloud_temp;
 
   PCloud2::Ptr intermediate_cloud(new PCloud2);
 
@@ -112,7 +117,6 @@ void process_cloud(const sensor_msgs::PointCloud2ConstPtr &input_cloud)
 
 
   fromROSMsg(*input_cloud, *cloud_in);
-  std::cout << min_z << max_z << voxel_size << seg_dist_tr;
 
   // Filter for depth
   pass_filter.setInputCloud(cloud_in);
@@ -120,6 +124,11 @@ void process_cloud(const sensor_msgs::PointCloud2ConstPtr &input_cloud)
   pass_filter.setFilterLimits(min_z, max_z);
   pass_filter.filter(*filtered_cloud);
 
+  pcl::StatisticalOutlierRemoval<Point> sor;
+  sor.setInputCloud(filtered_cloud);
+  sor.setMeanK(50);
+  sor.setStddevMulThresh (1.0);
+  sor.filter(*filtered_cloud);
   
 
   // Downsampling of the PCL
@@ -128,16 +137,18 @@ void process_cloud(const sensor_msgs::PointCloud2ConstPtr &input_cloud)
   voxel.setDownsampleAllData(true);
   voxel.filter(*ds_cloud);
 
-  seg.setOptimizeCoefficients (true);
+  seg.setOptimizeCoefficients(true);
   seg.setModelType (pcl::SACMODEL_PLANE);
   seg.setMethodType (pcl::SAC_RANSAC);
   seg.setDistanceThreshold(seg_dist_tr);
-  seg.setMaxIterations(100);
+  seg.setMaxIterations(1000);
 
  // New segmentation
     int original_size = ds_cloud->height*ds_cloud->width;
     int n_planes = 0;
+    int count = 0;
     while (ds_cloud->height*ds_cloud->width > original_size*plane_perc){
+       
 
         // Fit a plane
         seg.setInputCloud(ds_cloud);
@@ -169,18 +180,18 @@ void process_cloud(const sensor_msgs::PointCloud2ConstPtr &input_cloud)
         extract.setInputCloud(ds_cloud);
         extract.setIndices(inliers);
         extract.setNegative(true);
-        extract.filter(non_plane_cloud);
-        ds_cloud->swap(non_plane_cloud);
+        extract.filter(cloud_temp);
+        ds_cloud->swap(cloud_temp);
 
         // Display infor
-        ROS_INFO("%s: fitted plane %i: %fx%s%fy%s%fz%s%f=0 (inliers: %zu/%i)",
-                "kinect",n_planes,
-                 coefficients->values[0],(coefficients->values[1]>=0?"+":""),
-                 coefficients->values[1],(coefficients->values[2]>=0?"+":""),
-                 coefficients->values[2],(coefficients->values[3]>=0?"+":""),
-                 coefficients->values[3],
-                 inliers->indices.size(),original_size);
-        ROS_INFO("%s: poitns left in cloud %i","Kinect",ds_cloud->width*ds_cloud->height);
+        // ROS_INFO("%s: fitted plane %i: %fx%s%fy%s%fz%s%f=0 (inliers: %zu/%i)",
+        //         "kinect",n_planes,
+        //          coefficients->values[0],(coefficients->values[1]>=0?"+":""),
+        //          coefficients->values[1],(coefficients->values[2]>=0?"+":""),
+        //          coefficients->values[2],(coefficients->values[3]>=0?"+":""),
+        //          coefficients->values[3],
+        //          inliers->indices.size(),original_size);
+        // ROS_INFO("%s: poitns left in cloud %i","Kinect",ds_cloud->width*ds_cloud->height);
 
         // Nest iteration
         n_planes++;
@@ -188,32 +199,50 @@ void process_cloud(const sensor_msgs::PointCloud2ConstPtr &input_cloud)
 
 
   
-  toROSMsg(non_plane_cloud, *intermediate_cloud);
-  intermediate_cloud->header.frame_id = "kinect2_ir_optical_frame";   
-  pub_intermediate.publish(intermediate_cloud);
+//   toROSMsg(non_plane_cloud, *intermediate_cloud);
+//   intermediate_cloud->header.frame_id = "kinect2_ir_optical_frame";   
+//   pub_intermediate.publish(intermediate_cloud);
  
   
-  // // Segmentation
 
- 
+  pcl::search::KdTree<Point>::Ptr tree(new pcl::search::KdTree<Point>);
+  tree->setInputCloud(ds_cloud);
+
+  std::vector<pcl::PointIndices> cluster_indices;
+  pcl::EuclideanClusterExtraction<Point> ec;
+  ec.setClusterTolerance(0.02); // 2cm
+  ec.setMinClusterSize(min_cluster_size);
+  ec.setMaxClusterSize(max_cluster_size);
+  ec.setSearchMethod(tree);
+  ec.setInputCloud(ds_cloud);
+  ec.extract(cluster_indices);
+  createColors();
+  int j = 0;
+  for (std::vector<pcl::PointIndices>::const_iterator it = cluster_indices.begin(); it != cluster_indices.end(); ++it)
+  {
+    for (const auto& idx : it->indices){
+
+        // Get Point
+        pcl::PointXYZRGB pt = ds_cloud->points[idx];
+
+        // Copy point to new cloud
+        pcl::PointXYZRGB pt_color;
+        pt_color.x = pt.x;
+        pt_color.y = pt.y;
+        pt_color.z = pt.z;
+        uint32_t rgb;
+        rgb = colors[j].getColor();
+        pt_color.rgb = *reinterpret_cast<float*>(&rgb);
+        cloud_cluster->points.push_back(pt_color);
 
 
-  // seg.setInputCloud(ds_cloud);
-  // seg.segment(*inliers_floor, *coefficients_floor);
+    }
+    j++;
+  }
 
-  // if (inliers_floor->indices.size() == 0)
-  // {
-  //   ROS_ERROR("Couldn't estimate a planar model from dataset!");
-  //   return;
-  // }
-
-  // for (size_t i = 0; i < inliers_floor->indices.size(); ++i)
-  // {
-  //   ds_cloud->points[inliers_floor->indices[i]].r = 255;
-  //   ds_cloud->points[inliers_floor->indices[i]].g = 0;
-  //   ds_cloud->points[inliers_floor->indices[i]].b = 0;
-  // }
-
+  toROSMsg(*cloud_cluster, *intermediate_cloud);
+  intermediate_cloud->header.frame_id = "kinect2_ir_optical_frame";   
+  pub_intermediate.publish(intermediate_cloud);
   
  
 }
@@ -231,7 +260,8 @@ int main(int argc, char **argv)
   nh.getParam("/kinect_node/voxel_size", voxel_size);
   nh.getParam("/kinect_node/seg_dist_tr", seg_dist_tr);
   nh.getParam("/kinect_node/plane_perc", plane_perc);
-
+  nh.getParam("/kinect_node/min_cluster_size", min_cluster_size);
+  nh.getParam("/kinect_node/max_cluster_size", max_cluster_size);
 
   pub_intermediate = nh.advertise<PCloud2>("/intermediate", 1, true);
   sub = nh.subscribe("/kinect2/sd/points", 1, process_cloud);

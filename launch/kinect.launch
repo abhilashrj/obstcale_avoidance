@@ -6,8 +6,10 @@
   <node pkg="obstacle_avoidance" name="kinect_node" type="kinect_node" output="screen">
     <param name="min_z" type="double" value="0.0"/>
     <param name="max_z" type="double" value="5.0"/>
-    <param name="voxel_size" type="double" value="0.012"/>
-    <param name="seg_dist_tr" type="double" value="0.02"/>
-     <param name="plane_perc" type="double" value="0.20"/>
+    <param name="voxel_size" type="double" value="0.01"/>
+    <param name="seg_dist_tr" type="double" value="0.06"/>
+    <param name="plane_perc" type="double" value="0.30"/>
+    <param name="min_cluster_size" type="int" value="1000"/>
+    <param name="max_cluster_size" type="int" value="10000"/>
   </node>
 </launch>
