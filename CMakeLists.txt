@@ -4,6 +4,9 @@ project(obstacle_avoidance)
 ## Compile as C++11, supported in ROS Kinetic and newer
 # add_compile_options(-std=c++11)
 
+set(OpenCV_DIR "/home/abhilash/opencv/build")
+find_package( OpenCV REQUIRED COMPONENTS core imgproc highgui )
+
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
@@ -16,6 +19,8 @@ find_package(catkin REQUIRED COMPONENTS
   message_generation
   message_runtime
   std_msgs
+  cv_bridge
+  image_transport
 )
 
 find_package(PCL REQUIRED)
@@ -128,6 +133,7 @@ include_directories(
     ${catkin_INCLUDE_DIRS}
     ${PCL_INCLUDE_DIRS}
     ${Boost_INCLUDE_DIRS}
+    ${OpenCV_INCLUDE_DIRS}
 )
 
 
@@ -137,8 +143,12 @@ add_definitions(${PCL_DEFINITIONS})
 
 add_executable(kinect_node src/process.cpp)
 target_link_libraries(kinect_node
-  ${catkin_LIBRARIES} ${PCL_LIBRARIES}
+  ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS}
 )
+
+
+
+
 
 ## Declare a C++ library
 # add_library(${PROJECT_NAME}

@@ -19,14 +19,30 @@
 #include <pcl/filters/passthrough.h>
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/search/kdtree.h>
-
+#include <image_transport/image_transport.h>
 #include <fstream>
+
 #include <vector>
+
+#include <message_filters/subscriber.h>
+#include <message_filters/synchronizer.h>
+#include <message_filters/time_synchronizer.h>
+#include <message_filters/sync_policies/approximate_time.h>
+#include <sensor_msgs/Image.h>
+#include <sensor_msgs/CameraInfo.h>
+
+
+ #include <cv_bridge/cv_bridge.h>
+ #include <opencv2/highgui/highgui.hpp>
+ #include <opencv2/imgproc/imgproc.hpp>
 
 typedef pcl::PointXYZRGB Point;
 typedef sensor_msgs::PointCloud2 PCloud2;
 
 ros::Publisher pub_intermediate;
+image_transport::Publisher image_pub_;
+
+ros::Subscriber sub; 
 float min_z, max_z, voxel_size,seg_dist_tr, plane_perc;
 int min_cluster_size, max_cluster_size;
 
@@ -72,7 +88,7 @@ void createColors(){
         uint8_t r = 0;
         uint8_t g = 0;
         uint8_t b = 0;
-        for (int i=0;i<20;i++){
+        for (int i=0;i<300000;i++){
             while (r<70 && g < 70 && b < 70){
                 r = rand()%(255);
                 g = rand()%(255);
@@ -84,16 +100,45 @@ void createColors(){
             b = 0;
             colors.push_back(c);
         }
+}
+
+
+void convert_point_cloud_to_opencvimage(pcl::PointCloud<Point>::Ptr point_cloud){
+  float centre_x = 944.6798;
+  float centre_y = 677.7635;
+  float focal_x = 0.74;
+  float focal_y = 0.77;
+  int width = 512,  height =424;
+  cv::Mat cv_image = cv::Mat(height, width, CV_32FC1, cv::Scalar(std::numeric_limits<float>::max()));
+
+  for (int i=0; i<point_cloud->points.size();i++){
+        float z = point_cloud->points[i].z*1000.0;
+        float u = (point_cloud->points[i].x*1000.0*focal_x) / z;
+        float v = (point_cloud->points[i].y*1000.0*focal_y) / z;
+        int pixel_pos_x = (int)(u + centre_x);
+        int pixel_pos_y = (int)(v + centre_y);
+
+    if (pixel_pos_x > (width-1)){
+      pixel_pos_x = width -1;
     }
+    if (pixel_pos_y > (height-1)){
+      pixel_pos_y = height-1;
+    }
+    cv_image.at<float>(pixel_pos_y, pixel_pos_x) = z;
+  }
+
+  cv_image.convertTo(cv_image, CV_16UC1);
+  
+  sensor_msgs::ImagePtr output_image = cv_bridge::CvImage(std_msgs::Header(), "16UC1", cv_image).toImageMsg();
+  image_pub_.publish(output_image);
+  std::cout << "Published images";
+}
 
 
-
-
-
-void process_cloud(const sensor_msgs::PointCloud2ConstPtr &input_cloud)
+void process_cloud(const sensor_msgs::ImageConstPtr& image, const sensor_msgs::CameraInfoConstPtr& cam_info, const sensor_msgs::PointCloud2ConstPtr &input_cloud)
 {
   
- 
+
 
   pcl::PointCloud<Point>::Ptr cloud_in(new pcl::PointCloud<Point>), 
                          ds_cloud(new pcl::PointCloud<Point>),
@@ -199,11 +244,10 @@ void process_cloud(const sensor_msgs::PointCloud2ConstPtr &input_cloud)
         n_planes++;
     }
 
-
+      toROSMsg(*ds_cloud, *intermediate_cloud);
+      intermediate_cloud->header.frame_id = "kinect2_ir_optical_frame";   
+      pub_intermediate.publish(intermediate_cloud);
   
-//   toROSMsg(*ds_cloud, *intermediate_cloud);
-//   intermediate_cloud->header.frame_id = "kinect2_ir_optical_frame";   
-//   pub_intermediate.publish(intermediate_cloud);
  
   
 
@@ -219,7 +263,28 @@ void process_cloud(const sensor_msgs::PointCloud2ConstPtr &input_cloud)
   ec.setInputCloud(ds_cloud);
   ec.extract(cluster_indices);
   createColors();
-  int j = 0;
+
+
+  float centre_x = cam_info->K[2];
+  float centre_y = cam_info->K[5];
+  float focal_x = cam_info->K[0];
+  float focal_y = cam_info->K[4];
+  int width = cam_info->width,  height = cam_info->height;
+ 
+  // std::cout <<  centre_x << " " << centre_y << " "   << focal_x << " "  << focal_y << " "  << width  << " "  << height;
+                //  255.141          207.707               365.013              0                512 424 
+  cv_bridge::CvImagePtr cv_ptr;
+    try
+    {
+      cv_ptr = cv_bridge::toCvCopy(image, sensor_msgs::image_encodings::RGB8);
+    }
+    catch (cv_bridge::Exception& e)
+    {
+      ROS_ERROR("cv_bridge exception: %s", e.what());
+      return;
+    }
+
+  int j=0;
   for (std::vector<pcl::PointIndices>::const_iterator it = cluster_indices.begin(); it != cluster_indices.end(); ++it)
   {
     for (const auto& idx : it->indices){
@@ -237,24 +302,54 @@ void process_cloud(const sensor_msgs::PointCloud2ConstPtr &input_cloud)
         pt_color.rgb = *reinterpret_cast<float*>(&rgb);
         cloud_cluster->points.push_back(pt_color);
 
-
+        float z = pt.z*1000.0;
+        float u = (pt.x*1000.0*focal_x) / z;
+        float v = (pt.y*1000.0*focal_y) / z;
+        int pixel_pos_x = (int)(u + centre_x);
+        int pixel_pos_y = (int)(v + centre_y);
+        if (pixel_pos_x > (cv_ptr->image.cols-1)){
+          pixel_pos_x = cv_ptr->image.cols-1;
+        }
+      if (pixel_pos_y > (cv_ptr->image.rows-1)){
+        pixel_pos_y = cv_ptr->image.rows-1;
+      }
+      if(pixel_pos_y < 0){
+        pixel_pos_y = 0;
+      }
+      if(pixel_pos_x < 0){
+        pixel_pos_x = 0;
+      }
+        // std::cout << pixel_pos_x << pixel_pos_x << "pixel pos";
+        cv_ptr->image.at<cv::Vec3b>(pixel_pos_y,pixel_pos_x)[0] = 255; 
+			  cv_ptr->image.at<cv::Vec3b>(pixel_pos_y,pixel_pos_x)[1] = 0;  
+			  cv_ptr->image.at<cv::Vec3b>(pixel_pos_y,pixel_pos_x)[2] = 0;  
     }
     j++;
   }
 
-  toROSMsg(*cloud_cluster, *intermediate_cloud);
+   toROSMsg(*cloud_cluster, *intermediate_cloud);
   intermediate_cloud->header.frame_id = "kinect2_ir_optical_frame";   
   pub_intermediate.publish(intermediate_cloud);
+ 
+
+    image_pub_.publish(cv_ptr->toImageMsg());
   
+  // convert_point_cloud_to_opencvimage(cloud_cluster);
+
  
 }
+
+
+
+
+
+
 
 int main(int argc, char **argv)
 {
   ros::init(argc, argv, "kinect_node");
   ros::NodeHandle nh;
   ros::Subscriber sub;
-
 
   createColors();
   nh.getParam("/kinect_node/min_z", min_z);
@@ -264,9 +359,22 @@ int main(int argc, char **argv)
   nh.getParam("/kinect_node/plane_perc", plane_perc);
   nh.getParam("/kinect_node/min_cluster_size", min_cluster_size);
   nh.getParam("/kinect_node/max_cluster_size", max_cluster_size);
-
   pub_intermediate = nh.advertise<PCloud2>("/intermediate", 1, true);
-  sub = nh.subscribe("/kinect2/sd/points", 1, process_cloud);
+  image_transport::ImageTransport it_(nh);
+  image_pub_ = it_.advertise("/image_converter/output_video", 1);
+
+
+  //sub = nh.subscribe("/kinect2/sd/points", 1, process_cloud);
+
+  message_filters::Subscriber<sensor_msgs::Image> image_sub(nh, "/kinect2/sd/image_color_rect", 1);
+  message_filters::Subscriber<sensor_msgs::CameraInfo> info_sub(nh, "/kinect2/sd/camera_info", 1);
+  message_filters::Subscriber<sensor_msgs::PointCloud2> pc_sub(nh, "/kinect2/sd/points", 1);
+  message_filters::TimeSynchronizer<sensor_msgs::Image, sensor_msgs::CameraInfo, sensor_msgs::PointCloud2> sync(image_sub, info_sub, pc_sub, 10);
+  sync.registerCallback(boost::bind(&process_cloud, _1, _2, _3));
+
+
+
+
   while (true)
   {
     ros::spinOnce();
@@ -274,3 +382,4 @@ int main(int argc, char **argv)
   
   
 }
+

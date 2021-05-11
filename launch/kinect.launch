@@ -12,4 +12,5 @@
     <param name="min_cluster_size" type="int" value="100"/>
     <param name="max_cluster_size" type="int" value="10000"/>
   </node>
+
 </launch>
